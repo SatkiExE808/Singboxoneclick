@@ -8,7 +8,7 @@ REPO="Singboxoneclick"
 SCRIPT_NAME="Satki-singbox.sh"
 
 # URL to your main script (RAW URL!)
-SCRIPT_URL="https://raw.githubusercontent.com/$USERNAME/$REPO/main/$SCRIPT_NAME"
+SCRIPT_URL="https://raw.githubusercontent.com/SatkiExE808/Singboxoneclick/main/Satki-singbox.sh"
 
 # Download the script
 if command -v curl &>/dev/null; then
