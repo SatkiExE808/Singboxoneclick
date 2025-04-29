@@ -7,7 +7,7 @@ USERNAME="SatkiExE808"
 REPO="Singboxoneclick"
 
 # URL to your main script
-SCRIPT_URL="https://raw.githubusercontent.com/$USERNAME/$REPO/main/fully-persistent-singbox-menu-with-vless-fix.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/$USERNAME/$REPO/main/Satki-singbox.sh"
 
 # Download the script
 if command -v curl &>/dev/null; then
