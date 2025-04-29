@@ -2,12 +2,12 @@
 
 echo "Installing Sing-Box Manager..."
 
-# Your GitHub username and repository name
-USERNAME="SatkiExE808"  # Replace with your actual GitHub username
-REPO="Singboxoneclick"    # Replace with your actual repository name
+# GitHub username and repository name
+USERNAME="SatkiExE808"
+REPO="Singboxoneclick"
 
 # URL to your main script
-SCRIPT_URL="https://github.com/SatkiExE808/Singboxoneclick/blob/main/Satki-singbox.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/$USERNAME/$REPO/main/fully-persistent-singbox-menu-with-vless-fix.sh"
 
 # Download the script
 if command -v curl &>/dev/null; then
@@ -33,7 +33,7 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "This script needs to run as root. Using sudo..."
   sudo bash singbox-menu.sh
 else
-  # Run the script
+  # Run the script directly
   bash singbox-menu.sh
 fi
 
