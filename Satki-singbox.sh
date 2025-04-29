@@ -1,3 +1,32 @@
+#!/usr/bin/env bash
+
+set -e
+
+DB="./protocols.db"  # For testing, use current directory. Change to /etc/sing-box/protocols.db for production.
+
+# Helper: Generate UUID
+gen_uuid() { cat /proc/sys/kernel/random/uuid; }
+
+# Helper: Prompt with default
+prompt() {
+  local msg="$1"
+  local def="$2"
+  read -p "$msg [$def]: " val
+  echo "${val:-$def}"
+}
+
+# Prevent duplicate protocol/port entries
+protocol_exists() {
+  local proto="$1"
+  local port="$2"
+  grep -q "^$proto|$port" "$DB" 2>/dev/null
+}
+
+# Dummy generate_config function for demonstration
+generate_config() {
+  echo "Generating config (dummy function)..."
+}
+
 # Add protocol to database
 add_protocol() {
   echo "Select protocol to add:"
@@ -8,10 +37,10 @@ add_protocol() {
   echo "5. Trojan"
   echo "6. Hysteria2"
   read -p "> " idx
-  
+
   # Flag to track if a new protocol was added
   local protocol_added=false
-  
+
   case $idx in
     1)
       port=$(prompt "SOCKS5 port" "1080")
@@ -97,3 +126,23 @@ add_protocol() {
     generate_config
   fi
 }
+
+# Simple menu
+menu() {
+  while true; do
+    echo "=============================="
+    echo " sing-box 管理菜单 / Menu"
+    echo "=============================="
+    echo "1. Add protocol"
+    echo "2. Exit"
+    read -p "Choose: " CHOICE
+    case $CHOICE in
+      1) add_protocol ;;
+      2) echo "Bye!"; exit 0 ;;
+      *) echo "Invalid choice, try again." ;;
+    esac
+    echo
+  done
+}
+
+menu
