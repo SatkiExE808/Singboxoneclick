@@ -2,7 +2,12 @@
 
 set -e
 
-DB="./protocols.db"  # For testing, use current directory. Change to /etc/sing-box/protocols.db for production.
+DB="/etc/sing-box/protocols.db"
+CERT_DIR="/etc/sing-box/cert"
+CONFIG="/etc/sing-box/config.json"
+DOMAIN_FILE="/etc/sing-box/domain.txt"
+
+mkdir -p /etc/sing-box
 
 # Helper: Generate UUID
 gen_uuid() { cat /proc/sys/kernel/random/uuid; }
@@ -15,16 +20,30 @@ prompt() {
   echo "${val:-$def}"
 }
 
+# Helper: Green title
+green_title() {
+  echo -e "\033[32m\033[01m$1\033[0m"
+}
+
+# Automatic: System-wide disable IPv6
+disable_ipv6() {
+  echo "Disabling IPv6 system-wide for maximum privacy..."
+  grep -q disable_ipv6 /etc/sysctl.conf || cat >> /etc/sysctl.conf <<EOF
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+  sysctl -p
+  echo "IPv6 disabled. (Reboot may be required for full effect.)"
+}
+
+disable_ipv6
+
 # Prevent duplicate protocol/port entries
 protocol_exists() {
   local proto="$1"
   local port="$2"
   grep -q "^$proto|$port" "$DB" 2>/dev/null
-}
-
-# Dummy generate_config function for demonstration
-generate_config() {
-  echo "Generating config (dummy function)..."
 }
 
 # Add protocol to database
@@ -127,18 +146,297 @@ add_protocol() {
   fi
 }
 
-# Simple menu
+# Remove protocol from database
+remove_protocol() {
+  show_protocols
+  read -p "Enter the protocol line number to remove: " lineno
+  if [[ "$lineno" =~ ^[0-9]+$ ]]; then
+    sed -i "${lineno}d" $DB
+    echo "Protocol removed."
+    echo "Regenerating configuration..."
+    generate_config
+  else
+    echo "Invalid input."
+  fi
+}
+
+# Show all enabled protocols
+show_protocols() {
+  green_title "Enabled protocols:"
+  if [[ ! -s $DB ]]; then
+    echo "No protocols enabled."
+  else
+    nl -w2 -s'. ' $DB
+  fi
+}
+
+# Remove config.json and disable sing-box
+remove_config() {
+  echo "Removing $CONFIG and disabling sing-box..."
+  rm -f $CONFIG
+  systemctl stop sing-box 2>/dev/null || true
+  systemctl disable sing-box 2>/dev/null || true
+  echo "Config removed and sing-box disabled."
+}
+
+# Generate config from database
+generate_config() {
+  if [[ ! -s $DB ]]; then
+    echo "No protocols enabled. Please add at least one protocol first."
+    return
+  fi
+
+  # Check if any protocol needs TLS
+  NEED_TLS=false
+  while IFS="|" read -r proto port arg1 arg2 arg3 arg4; do
+    case $proto in
+      VMESS|VLESS|TROJAN|HYSTERIA2)
+        if [[ "$arg4" =~ ^[Yy]$ ]] || [[ "$arg3" =~ ^[Yy]$ ]]; then
+          NEED_TLS=true
+        fi
+        ;;
+    esac
+  done < $DB
+
+  if $NEED_TLS; then
+    DOMAIN=$(prompt "Enter your domain (must point to this VPS for TLS)" "your.domain.com")
+    echo "$DOMAIN" > $DOMAIN_FILE
+    echo "Obtaining free TLS certificate for $DOMAIN using Let's Encrypt ..."
+    apt update && apt install -y socat curl
+    mkdir -p $CERT_DIR
+    if ! command -v acme.sh &>/dev/null; then
+      curl https://get.acme.sh | sh
+      export PATH="$HOME/.acme.sh":$PATH
+    fi
+    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+    if ! ~/.acme.sh/acme.sh --issue --standalone -d $DOMAIN --force; then
+      echo "Let's Encrypt failed or rate-limited. Generating a self-signed certificate for testing..."
+      openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout $CERT_DIR/private.key \
+        -out $CERT_DIR/cert.pem \
+        -subj "/CN=$DOMAIN"
+      echo "Self-signed certificate generated at $CERT_DIR/"
+    else
+      ~/.acme.sh/acme.sh --install-cert -d $DOMAIN \
+        --key-file $CERT_DIR/private.key \
+        --fullchain-file $CERT_DIR/cert.pem
+      echo "TLS certificate installed at $CERT_DIR/"
+    fi
+  fi
+
+  # Open firewall ports
+  echo "Opening firewall ports..."
+  apt install -y ufw
+  while IFS="|" read -r proto port _; do
+    ufw allow "$port"
+  done < $DB
+  ufw allow 80
+  ufw allow 443
+  ufw reload
+
+  # Generate config (listen only on IPv4)
+  echo "Generating $CONFIG ..."
+  cat > $CONFIG <<EOF
+{
+  "log": { "level": "info" },
+  "inbounds": [
+EOF
+  FIRST=true
+  while IFS="|" read -r proto port arg1 arg2 arg3 arg4; do
+    [[ "$FIRST" == "true" ]] && FIRST=false || echo "," >> $CONFIG
+    case $proto in
+      SOCKS5)
+        echo "    { \"type\": \"socks\", \"listen\": \"0.0.0.0\", \"listen_port\": $port }" >> $CONFIG
+        ;;
+      SS)
+        echo "    { \"type\": \"shadowsocks\", \"listen\": \"0.0.0.0\", \"listen_port\": $port, \"method\": \"aes-128-gcm\", \"password\": \"$arg1\" }" >> $CONFIG
+        ;;
+      VMESS)
+        if [[ "$arg2" =~ ^[Yy]$ ]]; then
+          if [[ "$arg4" =~ ^[Yy]$ ]]; then
+            echo "    { \"type\": \"vmess\", \"listen\": \"0.0.0.0\", \"listen_port\": $port, \"users\": [{ \"uuid\": \"$arg1\" }], \"transport\": { \"type\": \"ws\", \"path\": \"$arg3\" }, \"tls\": { \"enabled\": true, \"certificate_path\": \"$CERT_DIR/cert.pem\", \"key_path\": \"$CERT_DIR/private.key\" } }" >> $CONFIG
+          else
+            echo "    { \"type\": \"vmess\", \"listen\": \"0.0.0.0\", \"listen_port\": $port, \"users\": [{ \"uuid\": \"$arg1\" }], \"transport\": { \"type\": \"ws\", \"path\": \"$arg3\" } }" >> $CONFIG
+          fi
+        else
+          echo "    { \"type\": \"vmess\", \"listen\": \"0.0.0.0\", \"listen_port\": $port, \"users\": [{ \"uuid\": \"$arg1\" }] }" >> $CONFIG
+        fi
+        ;;
+      VLESS)
+        # Always use ws+tls for VLESS in export and config
+        echo "    { \"type\": \"vless\", \"listen\": \"0.0.0.0\", \"listen_port\": $port, \"users\": [{ \"uuid\": \"$arg1\" }], \"transport\": { \"type\": \"ws\", \"path\": \"$arg3\" }, \"tls\": { \"enabled\": true, \"certificate_path\": \"$CERT_DIR/cert.pem\", \"key_path\": \"$CERT_DIR/private.key\" } }" >> $CONFIG
+        ;;
+      TROJAN)
+        # Always require TLS for Trojan
+        echo "    { \"type\": \"trojan\", \"listen\": \"0.0.0.0\", \"listen_port\": $port, \"users\": [{ \"password\": \"$arg1\" }], \"tls\": { \"enabled\": true, \"certificate_path\": \"$CERT_DIR/cert.pem\", \"key_path\": \"$CERT_DIR/private.key\" } }" >> $CONFIG
+        ;;
+      HYSTERIA2)
+        echo "    { \"type\": \"hysteria2\", \"listen\": \"0.0.0.0\", \"listen_port\": $port, \"users\": [{ \"password\": \"$arg1\" }], \"tls\": { \"enabled\": true, \"certificate_path\": \"$CERT_DIR/cert.pem\", \"key_path\": \"$CERT_DIR/private.key\" } }" >> $CONFIG
+        ;;
+    esac
+  done < $DB
+  cat >> $CONFIG <<EOF
+  ],
+  "outbounds": [
+    { "type": "direct" }
+  ]
+}
+EOF
+  # Create systemd service if it doesn't exist
+  if [ ! -f "/etc/systemd/system/sing-box.service" ]; then
+    cat > /etc/systemd/system/sing-box.service <<EOF
+[Unit]
+Description=sing-box service
+Documentation=https://sing-box.sagernet.org
+After=network.target nss-lookup.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNPROC=10000
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable sing-box
+  fi
+
+  systemctl restart sing-box
+  echo "Config generated and sing-box restarted."
+  export_links
+}
+
+# Export links for all protocols (IPv4/domain only)
+export_links() {
+  if [[ ! -s $DB ]]; then
+    echo "No protocols enabled."
+    return
+  fi
+  if [[ -f $DOMAIN_FILE ]]; then
+    host=$(cat $DOMAIN_FILE)
+  else
+    host=$(curl -4 -s ifconfig.me)
+  fi
+  green_title "Export links:"
+  n=1
+  while IFS="|" read -r proto port arg1 arg2 arg3 arg4; do
+    case $proto in
+      SOCKS5)
+        echo "$n. SOCKS5: socks5://$host:$port"
+        ;;
+      SS)
+        echo "$n. Shadowsocks: ss://$(echo -n "aes-128-gcm:$arg1@$host:$port" | base64 | tr -d '\n')"
+        ;;
+      VMESS)
+        echo "$n. Vmess: vmess://$(echo -n "{\"v\":\"2\",\"ps\":\"singbox\",\"add\":\"$host\",\"port\":\"$port\",\"id\":\"$arg1\",\"aid\":\"0\",\"net\":\"tcp\",\"type\":\"none\",\"host\":\"\",\"path\":\"\",\"tls\":\"\"}" | base64 | tr -d '\n')"
+        ;;
+      VLESS)
+        # Always export ws+tls link for VLESS
+        echo "$n. VLESS: vless://$arg1@$host:$port?type=ws&security=tls&host=$host&path=%2Fvlessws"
+        ;;
+      TROJAN)
+        echo "$n. Trojan: trojan://$arg1@$host:$port"
+        ;;
+      HYSTERIA2)
+        echo "$n. Hysteria2: hysteria2://$arg1@$host:$port?insecure=1"
+        ;;
+    esac
+    n=$((n+1))
+  done < $DB
+}
+
+# Install/Uninstall/Update/Status functions
+install_singbox() {
+  echo "Installing sing-box..."
+  apt update && apt install -y wget tar
+  SINGBOX_VERSION="1.8.7"
+  ARCH="amd64"
+  wget -O /tmp/sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${ARCH}.tar.gz
+  tar -xzf /tmp/sing-box.tar.gz -C /tmp
+  cp /tmp/sing-box-${SINGBOX_VERSION}-linux-${ARCH}/sing-box /usr/local/bin/
+  chmod +x /usr/local/bin/sing-box
+  mkdir -p /etc/sing-box
+
+  # Create systemd service
+  cat > /etc/systemd/system/sing-box.service <<EOF
+[Unit]
+Description=sing-box service
+Documentation=https://sing-box.sagernet.org
+After=network.target nss-lookup.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNPROC=10000
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable sing-box
+  echo "sing-box installed."
+}
+
+uninstall_singbox() {
+  echo "Uninstalling sing-box..."
+  systemctl stop sing-box 2>/dev/null || true
+  systemctl disable sing-box 2>/dev/null || true
+  rm -f /usr/local/bin/sing-box
+  rm -rf /etc/sing-box
+  rm -f /etc/systemd/system/sing-box.service
+  systemctl daemon-reload
+  echo "sing-box uninstalled."
+}
+
+update_singbox() {
+  echo "Updating sing-box..."
+  uninstall_singbox
+  install_singbox
+}
+
+show_status() {
+  systemctl status sing-box --no-pager || echo "sing-box is not installed or not running."
+}
+
+# Main menu
 menu() {
   while true; do
-    echo "=============================="
-    echo " sing-box 管理菜单 / Menu"
-    echo "=============================="
+    green_title "=============================="
+    green_title " sing-box 管理菜单 / Menu"
+    green_title "=============================="
     echo "1. Add protocol"
-    echo "2. Exit"
+    echo "2. Remove protocol"
+    echo "3. Show enabled protocols"
+    echo "4. Generate config (all protocols stay online)"
+    echo "5. Export links"
+    echo "6. Install sing-box"
+    echo "7. Uninstall sing-box"
+    echo "8. Update sing-box"
+    echo "9. Show status"
+    echo "10. Remove config and disable sing-box"
+    echo "11. Exit"
     read -p "Choose: " CHOICE
     case $CHOICE in
       1) add_protocol ;;
-      2) echo "Bye!"; exit 0 ;;
+      2) remove_protocol ;;
+      3) show_protocols ;;
+      4) generate_config ;;
+      5) export_links ;;
+      6) install_singbox ;;
+      7) uninstall_singbox ;;
+      8) update_singbox ;;
+      9) show_status ;;
+      10) remove_config ;;
+      11) echo "Bye!"; exit 0 ;;
       *) echo "Invalid choice, try again." ;;
     esac
     echo
