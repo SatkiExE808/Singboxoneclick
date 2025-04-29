@@ -5,10 +5,10 @@ echo "Installing Satki Sing-Box Manager..."
 # GitHub username and repository name
 USERNAME="SatkiExE808"
 REPO="Singboxoneclick"
-SCRIPT_NAME="satki-singbox.sh"
+SCRIPT_NAME="Satki-singbox.sh"
 
-# URL to your main script
-SCRIPT_URL="https://github.com/SatkiExE808/Singboxoneclick/blob/main/Satki-singbox.sh"
+# URL to your main script (RAW URL!)
+SCRIPT_URL="https://raw.githubusercontent.com/$USERNAME/$REPO/main/$SCRIPT_NAME"
 
 # Download the script
 if command -v curl &>/dev/null; then
