@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-echo "Installing Sing-Box Manager..."
+echo "Installing Satki Sing-Box Manager..."
 
 # GitHub username and repository name
 USERNAME="SatkiExE808"
@@ -11,12 +11,12 @@ SCRIPT_URL="https://raw.githubusercontent.com/$USERNAME/$REPO/main/Satki-singbox
 
 # Download the script
 if command -v curl &>/dev/null; then
-  curl -fsSL "$SCRIPT_URL" -o singbox-menu.sh || {
+  curl -fsSL "$SCRIPT_URL" -o satki-singbox.sh || {
     echo "Failed to download script with curl!"
     exit 1
   }
 elif command -v wget &>/dev/null; then
-  wget -q -O singbox-menu.sh "$SCRIPT_URL" || {
+  wget -q -O satki-singbox.sh "$SCRIPT_URL" || {
     echo "Failed to download script with wget!"
     exit 1
   }
@@ -26,15 +26,15 @@ else
 fi
 
 # Make the script executable
-chmod +x singbox-menu.sh
+chmod +x satki-singbox.sh
 
 # Check if we're running as root
 if [ "$(id -u)" -ne 0 ]; then
   echo "This script needs to run as root. Using sudo..."
-  sudo bash singbox-menu.sh
+  sudo bash satki-singbox.sh
 else
   # Run the script directly
-  bash singbox-menu.sh
+  bash satki-singbox.sh
 fi
 
 echo "Installation complete!"
